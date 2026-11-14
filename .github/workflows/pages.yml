@@ -1,0 +1,48 @@
+name: pages
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  actions: write
+concurrency:
+  group: pages
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build site
+        env:
+          DATA_KEY: ${{ secrets.DATA_KEY }}
+          DATA_PATH: ${{ secrets.DATA_PATH }}
+        run: |
+          set -euo pipefail
+          test ${#DATA_PATH} -ge 32
+          mkdir -p _site
+          cp -r web/. _site/
+          touch _site/.nojekyll
+          mkdir -p "_site/d/$DATA_PATH"
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:DATA_KEY -in data.enc | tar -xz -C "_site/d/$DATA_PATH"
+          tar --dereference --hard-dereference -C _site -cf "$RUNNER_TEMP/artifact.tar" .
+      - name: Upload
+        id: up
+        uses: actions/upload-artifact@v4
+        with:
+          name: github-pages
+          path: ${{ runner.temp }}/artifact.tar
+          retention-days: 1
+          if-no-files-found: error
+      - name: Deploy
+        uses: actions/deploy-pages@v4
+      - name: Delete the artifact (it holds the decrypted snapshot)
+        if: always() && steps.up.outputs.artifact-id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/${{ steps.up.outputs.artifact-id }}" >/dev/null
